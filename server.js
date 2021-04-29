@@ -25,8 +25,8 @@ app.use(express.json());
 
 app.get("/logout", (req, res) => {
   // clear jwt token from the user cookie
-  // res.clearCookie("nToken");
-  // res.redirect("/");
+  res.clearCookie("nToken");
+  res.redirect("/");
 });
 
 app.post("/login", async (req, res) => {
