@@ -1,46 +1,82 @@
 const express = require("express");
-const session = require("express-session");
-const { generatePassword } = require("./utility/utility");
-const app = express();
+const Joi = require("@hapi/joi");
+const jwt = require("jsonwebtoken");
 require("dotenv").config();
 require("./database/connection.js");
+const cookieParser = require("cookie-parser");
+const app = express();
+app.use(cookieParser());
 const User = require("./models/user.model");
+const { generatePassword, comparePassword } = require("./utility/utility");
+
+const registerSchema = Joi.object({
+  username: Joi.string().min(3).max(255).required(),
+  email: Joi.string().min(6).max(255).required().email(),
+  password: Joi.string().min(8).max(1024).required(),
+});
+
+const loginSchema = Joi.object({
+  email: Joi.string().min(6).max(255).required().email(),
+  password: Joi.string().min(8).max(1024).required(),
+});
 
 // Recognize incoming request as a JSON object
 app.use(express.json());
 
-app.post("/logout", (req, res) => {
-  console.log("Login is now in work");
+app.get("/logout", (req, res) => {
+  // clear jwt token from the user cookie
+  // res.clearCookie("nToken");
+  // res.redirect("/");
 });
 
-app.get("/login", async (req, res) => {
-  // if email exists match user password
+app.post("/login", async (req, res) => {
+  // validate the post data
 
-  const { email, password } = req.body;
+  try {
+    const { error } = loginSchema.validate(req.body);
 
-  if (!email || !password) {
-    res.status(400).send("Email or pasword is not correct");
+    if (error) {
+      return res.status(400).json({ error: error.details[0].message });
+    }
+
+    const { email, password } = req.body;
+    // Check email exists in db or not
+    const user = await User.findOne({ email: email });
+
+    if (!user) {
+      res.status(404).send("Oops User is not found!");
+    }
+
+    // Check password is valid or not
+    if (await comparePassword(password, user.password)) {
+      // Send JWT
+      let payload = { id: user._id };
+      const accessToken = jwt.sign(payload, process.env.JWT_SECRET);
+
+      // save token in the cookie for the browser
+      res.cookie("nToken", accessToken, { maxAge: 900000, httpOnly: true });
+
+      return res.status(200).send({ accessToken }).end();
+    }
+
+    res.status(400).send("password is not correct!").end();
+  } catch (error) {
+    console.log(error);
+    res.status(500).send("Server is not responding");
   }
-
-  // Check email exists in db or not
-  const user = await User.findOne({ email: email });
-
-  if (!user) {
-    res.status(404).send("Oops User is not found!");
-  }
-
-  // Check password is valid or not
-  if (await comparePassword(password, user.password)) {
-    res.status(200).send("Login Successfully!").end();
-  }
-
-  res.status(400).send("password is not correct!").end();
 });
 
 app.post("/register", async (req, res) => {
   const response = { status: 400 };
 
   try {
+    // validate the post data
+    const { error } = registerSchema.validate(req.body);
+
+    if (error) {
+      return res.status(400).json({ error: error.details[0].message });
+    }
+
     let { username, password, email } = req.body;
 
     // Make hash of the register user password
@@ -65,7 +101,7 @@ app.post("/register", async (req, res) => {
     // save user in database
     newUser
       .save()
-      .then((user) => res.status(200).json(user))
+      .then((user) => res.status(201).json(user))
       .catch((error) => {
         const errors = error.errors;
         const humanReadableError = [];
@@ -85,6 +121,42 @@ app.post("/register", async (req, res) => {
     res.json(err);
   }
 });
+
+/**
+ * Posts are only accessible for the login users
+ */
+app.post("/dashboard", authenticateToken, async (req, res) => {
+  console.log("User", req.user);
+
+  try {
+    const user = await User.findOne({ _id: req.user.name });
+
+    res.status(200).send({ user });
+  } catch (error) {
+    res.status(500).json({ error: error });
+  }
+});
+
+function authenticateToken(req, res, next) {
+  try {
+    const authHeader = req.headers["authorization"];
+    // Bearer TOKEN
+    const token = authHeader && authHeader.split(" ")[1];
+
+    if (token == null) return res.status(401);
+
+    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+      if (err) {
+        return res.status(401).send("You are not authorized");
+      }
+      req.user = user;
+      next();
+    });
+  } catch (error) {
+    console.log(error);
+    res.send(500);
+  }
+}
 
 const PORT = process.env.PORT || 5000;
 
